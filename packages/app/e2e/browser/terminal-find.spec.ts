@@ -1,4 +1,5 @@
 import { runWorkspaceActionFromCommandCenter } from "../support/helpers/command-center-workspace-actions";
+import { spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, test, type Page } from "../support/fixtures";
@@ -77,12 +78,144 @@ async function viewport(page: Page) {
   );
 }
 
+async function openControlCharacterTerminal(page: Page) {
+  await test.step("Run cat -v in a real bash terminal", async () => {
+    const terminal = await harness.createTerminal({
+      name: "Control characters",
+      command: "bash",
+      // Disable the tty's echo so ^F proves cat received the byte. Noncanonical
+      // input lets cat print it immediately, without waiting for Enter.
+      args: ["--noprofile", "--norc", "-c", "stty -echo -icanon; printf 'CAT_READY\\n'; cat -v"],
+    });
+    await harness.openTerminal(page, { terminalId: terminal.id });
+    await expect.poll(() => getTerminalBufferText(page)).toContain("CAT_READY");
+  });
+}
+
+async function pressTerminalShortcut(page: Page, shortcut: string) {
+  await test.step(`Press ${shortcut} in the terminal`, async () => {
+    await input(page).press(shortcut);
+  });
+}
+
+async function expectFindClosed(page: Page) {
+  await expect(query(page)).toBeHidden();
+  await expect(input(page)).toBeFocused();
+}
+
+async function recordTerminalEvidence(name: string, body: string) {
+  const evidencePath = test.info().outputPath(`${name}.txt`);
+  await writeFile(evidencePath, body);
+  await test.info().attach(name, { path: evidencePath, contentType: "text/plain" });
+}
+
+async function expectCatControlF(page: Page) {
+  await test.step("Cat displays ^F while Find stays closed", async () => {
+    await expect.poll(() => getTerminalBufferText(page)).toContain("^F");
+    await expectFindClosed(page);
+    await recordTerminalEvidence("cat-control-f", await getTerminalBufferText(page));
+  });
+}
+
+async function expectVimPageDown(page: Page, before: number) {
+  await test.step("Vim advances the visible top line while Find stays closed", async () => {
+    await expect.poll(() => visibleTopLineNumber(page)).toBeGreaterThan(before);
+    await expectFindClosed(page);
+    await recordTerminalEvidence(
+      "vim-page-down",
+      JSON.stringify({ before, after: await visibleTopLineNumber(page) }),
+    );
+  });
+}
+
+async function expectCatRoundTrip(page: Page) {
+  await test.step("Wait for cat to echo subsequent input from the pty", async () => {
+    await input(page).pressSequentially("PTY_ROUND_TRIP");
+    await input(page).press("Enter");
+    await expect.poll(() => getTerminalBufferText(page)).toContain("PTY_ROUND_TRIP");
+  });
+}
+
+async function openNumberedFileInVim(page: Page) {
+  await test.step("Open 300 numbered lines in vim without user configuration", async () => {
+    const terminal = await harness.createTerminal({
+      name: "Vim page down",
+      command: "bash",
+      args: [
+        "--noprofile",
+        "--norc",
+        "-c",
+        "seq 1 300 > numbered-lines.txt && vim -u NONE -i NONE numbered-lines.txt; printf 'VIM_EXITED\\n'; cat",
+      ],
+    });
+    await harness.openTerminal(page, { terminalId: terminal.id });
+    await expect.poll(() => getTerminalBufferText(page)).toContain("300L");
+    await expect.poll(() => visibleTopLineNumber(page)).toBe(1);
+  });
+}
+
+async function visibleTopLineNumber(page: Page) {
+  // Vim uses the alternate screen, so its active buffer starts at the visible top row.
+  return Number((await getTerminalBufferText(page)).split("\n")[0].trim());
+}
+
+async function quitVim(page: Page) {
+  await test.step("Leave vim with Escape and :q!", async () => {
+    await input(page).press("Escape");
+    await input(page).pressSequentially(":q!");
+    await input(page).press("Enter");
+    await expect.poll(() => getTerminalBufferText(page)).toContain("VIM_EXITED");
+  });
+}
+
 let harness: TerminalE2EHarness;
 test.beforeEach(async () => {
   harness = await TerminalE2EHarness.create({ tempPrefix: "terminal-find-" });
 });
 test.afterEach(async () => {
   await harness.cleanup();
+});
+
+test.describe("macOS terminal shortcuts", () => {
+  test.use({
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  });
+
+  test("sends Control+f to cat and opens Find with Meta+f", async ({ page }) => {
+    await openControlCharacterTerminal(page);
+    await pressTerminalShortcut(page, "Control+f");
+    await expectCatControlF(page);
+    await pressTerminalShortcut(page, "Meta+f");
+    await expect(query(page)).toBeFocused();
+  });
+
+  test("sends Control+f to vim to page down", async ({ page }) => {
+    const vim = spawnSync("which", ["vim"], { encoding: "utf8" });
+    await recordTerminalEvidence("which-vim", `status: ${vim.status}\n${vim.stdout}${vim.stderr}`);
+    test.skip(vim.status !== 0, "vim is not installed on this runner (which vim failed)");
+    await openNumberedFileInVim(page);
+    const before = await visibleTopLineNumber(page);
+    await pressTerminalShortcut(page, "Control+f");
+    await expectVimPageDown(page, before);
+    await quitVim(page);
+  });
+});
+
+test("opens Find with Control+f on Linux without sending ^F to cat", async ({ page }) => {
+  await openControlCharacterTerminal(page);
+  await pressTerminalShortcut(page, "Control+f");
+  await expect(query(page)).toBeFocused();
+  await test.step("Close Find and return focus to the terminal", async () => {
+    await query(page).press("Escape");
+    await expectFindClosed(page);
+  });
+  await expectCatRoundTrip(page);
+  await test.step("Cat received subsequent input without any ^F", async () => {
+    const output = await getTerminalBufferText(page);
+    expect(output).not.toContain("^F");
+    await recordTerminalEvidence("cat-without-control-f", output);
+  });
 });
 
 test("searches retained output without sending Find input to the shell", async ({

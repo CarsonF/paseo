@@ -4449,7 +4449,7 @@ export class DaemonClient {
       message: {
         type: "workspace.create.request",
         source: input.source,
-        // COMPAT(workspaceRequestReceipts): added in v0.8.0; remove once the daemon floor supports workspace receipts.
+        // COMPAT(workspaceRequestReceipts): added in v0.8.0; remove after 2027-03-15 once the daemon floor supports workspace receipts.
         ...(this.lastServerInfoMessage?.features?.workspaceRequestReceipts &&
         input.idempotencyKey !== undefined
           ? { idempotencyKey: input.idempotencyKey }

@@ -58,7 +58,7 @@ function fixture(modern: boolean) {
     resolve = done;
   });
   const client = new CreationClient({
-    supports: () => modern,
+    supports: (feature) => (feature === "creationLifecycle" ? modern : true),
     requestId: () => "generated-key",
     request: async (kind, input) => {
       requests.push({ kind, input });

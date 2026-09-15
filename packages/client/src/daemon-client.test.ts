@@ -291,23 +291,132 @@ test("advertises consumer-provided browser automation capabilities", async () =>
   });
 });
 
-test("retry-safe creation rejects older hosts before sending any request", async () => {
-  const transport = createMockTransport();
-  const client = new DaemonClient({
-    url: "ws://test",
-    clientId: "receipt-gate",
-    transportFactory: () => transport.transport,
-    reconnect: { enabled: false },
-  });
-  clients.push(client);
-  const connecting = client.connect();
-  transport.triggerOpen();
-  await connecting;
-  await expect(
-    client.createAgent({ provider: "codex", cwd: "/project", idempotencyKey: "creation" }),
-  ).rejects.toThrow("Update the host to use retry-safe agent creation.");
-  expect(transport.sent).toEqual([]);
-});
+test.each([false, true])(
+  "legacy structured creation keeps the prompt and schema together with receipt support=%s",
+  async (receipts) => {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "receipt-gate",
+      transportFactory: () => transport.transport,
+      reconnect: { enabled: false },
+    });
+    clients.push(client);
+    const connecting = client.connect();
+    transport.triggerOpen({ features: { agentRequestReceipts: receipts } });
+    await connecting;
+    const input = {
+      provider: "codex",
+      cwd: "/project",
+      idempotencyKey: "creation",
+      initialPrompt: "Start this agent",
+      outputSchema: { type: "object" },
+    };
+    const created = client.createAgent(input);
+    void created.catch(() => {});
+    const duplicate = client.createAgent(input);
+    void duplicate.catch(() => {});
+    expect(transport.sent).toHaveLength(1);
+    const request = parseSentFrame(transport.sent[0]);
+    expect(request).toMatchObject({
+      type: "create_agent_request",
+      initialPrompt: input.initialPrompt,
+      outputSchema: input.outputSchema,
+    });
+    expect(request).not.toHaveProperty("idempotencyKey");
+    transport.triggerMessage(
+      wrapSessionMessage({
+        type: "status",
+        payload: {
+          status: "agent_create_failed",
+          requestId: request.requestId,
+          error: "Provider failed",
+        },
+      }),
+    );
+    await expect(created).rejects.toThrow("Provider failed");
+    await expect(duplicate).rejects.toThrow("Provider failed");
+  },
+);
+
+test.each([false, true])(
+  "legacy workspace creation preserves availability with receipt support=%s",
+  async (receipts) => {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "legacy-workspace",
+      transportFactory: () => transport.transport,
+      reconnect: { enabled: false },
+    });
+    clients.push(client);
+    const connecting = client.connect();
+    transport.triggerOpen({ features: { workspaceRequestReceipts: receipts } });
+    await connecting;
+    const input = {
+      source: { kind: "directory" as const, path: "/project" },
+      idempotencyKey: "workspace",
+    };
+    const created = client.createWorkspace(input);
+    void created.catch(() => {});
+    const duplicate = client.createWorkspace(input);
+    void duplicate.catch(() => {});
+    expect(transport.sent).toHaveLength(1);
+    const request = parseSentFrame(transport.sent[0]);
+    expect(request).toMatchObject({ type: "workspace.create.request", source: input.source });
+    expect(request.idempotencyKey).toBe(receipts ? input.idempotencyKey : undefined);
+    transport.triggerMessage(
+      wrapSessionMessage({
+        type: "workspace.create.response",
+        payload: {
+          requestId: request.requestId,
+          workspace: null,
+          error: "Directory unavailable",
+          setupTerminalId: null,
+        },
+      }),
+    );
+    await expect(created).resolves.toMatchObject({ error: "Directory unavailable" });
+    await expect(duplicate).resolves.toMatchObject({ error: "Directory unavailable" });
+  },
+);
+
+test.each(["agent", "workspace"] as const)(
+  "a lost legacy %s response is not automatically replayed on reconnect",
+  async (kind) => {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "legacy-disconnect",
+      transportFactory: () => transport.transport,
+      reconnect: { enabled: false },
+    });
+    clients.push(client);
+    const connecting = client.connect();
+    transport.triggerOpen({ features: {} });
+    await connecting;
+    const creation =
+      kind === "agent"
+        ? client.createAgent({
+            provider: "codex",
+            cwd: "/project",
+            initialPrompt: "Start once",
+            idempotencyKey: "intent",
+          })
+        : client.createWorkspace({
+            source: { kind: "directory", path: "/project" },
+            idempotencyKey: "intent",
+          });
+    void creation.catch(() => {});
+    expect(transport.sent).toHaveLength(1);
+    transport.triggerClose({ code: 1006, reason: "Connection lost after dispatch" });
+    await expect(creation).rejects.toThrow();
+    const reconnecting = client.connect();
+    transport.triggerOpen({ features: {} });
+    await reconnecting;
+    expect(transport.sent).toEqual([]);
+  },
+);
 
 test("Hub management requires daemon support before dispatching requests", async () => {
   const mock = createMockTransport();

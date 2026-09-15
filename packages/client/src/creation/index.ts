@@ -18,7 +18,7 @@ export interface CreationResult {
   requestId?: string;
 }
 interface Dependencies {
-  supports: () => boolean;
+  supports: (feature: "creationLifecycle" | "agentRequestReceipts") => boolean;
   requestId: () => string;
   request: (kind: Kind, input: Record<string, unknown>) => Promise<CreationResult>;
   observe: (
@@ -105,23 +105,30 @@ export class CreationClient {
 
   private async legacyAgent(input: CreateAgentRequestOptions): Promise<CreationResult> {
     if (input.agentId) throw new Error("Update the host to use caller-selected creation IDs.");
+    const { idempotencyKey, ...unkeyed } = input;
+    const hasPrompt = Boolean(
+      input.initialPrompt?.trim() || input.images?.length || input.attachments?.length,
+    );
     // COMPAT(creationLifecycle): added in v0.8.0, remove after 2027-03-11 once the daemon floor supports creationLifecycle.
-    // Old keyed creates reject initialPrompt. Keep this adaptation private to the SDK.
-    if (input.idempotencyKey) {
-      const { initialPrompt = "", images, attachments, ...creation } = input;
-      const hasPrompt = Boolean(initialPrompt.trim() || images?.length || attachments?.length);
-      if (hasPrompt && input.outputSchema)
-        throw new Error("Update the host to create a keyed agent with structured initial output.");
-      const agent = await this.deps.legacyAgent(creation);
-      if (hasPrompt)
-        await this.deps.sendMessage(agent.id, initialPrompt, {
-          messageId: input.clientMessageId ?? `${input.idempotencyKey}:initial-message`,
-          images,
-          attachments,
-        });
-      return { agent, error: null };
+    // Without receipts, keep the original create-and-prompt RPC. Structured initial
+    // output also requires that RPC; splitting it into sendMessage loses the schema.
+    if (
+      !idempotencyKey ||
+      !this.deps.supports("agentRequestReceipts") ||
+      (hasPrompt && input.outputSchema)
+    ) {
+      return { agent: await this.deps.legacyAgent(unkeyed), error: null };
     }
-    return { agent: await this.deps.legacyAgent(input), error: null };
+    // Receipt-capable legacy hosts reject initialPrompt on keyed creates.
+    const { initialPrompt = "", images, attachments, ...creation } = input;
+    const agent = await this.deps.legacyAgent(creation);
+    if (hasPrompt)
+      await this.deps.sendMessage(agent.id, initialPrompt, {
+        messageId: input.clientMessageId ?? `${idempotencyKey}:initial-message`,
+        images,
+        attachments,
+      });
+    return { agent, error: null };
   }
 
   private start(
@@ -165,7 +172,7 @@ export class CreationClient {
       resolve,
       reject,
       settled: false,
-      modern: this.deps.supports(),
+      modern: this.deps.supports("creationLifecycle"),
       recovering: false,
     };
     this.operations.set(identity, operation);

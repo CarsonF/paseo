@@ -117,14 +117,18 @@ async function expectCatControlF(page: Page) {
   });
 }
 
-async function expectVimPageDown(page: Page, before: number) {
-  await test.step("Vim advances the visible top line while Find stays closed", async () => {
-    await expect.poll(() => visibleTopLineNumber(page)).toBeGreaterThan(before);
-    await expectFindClosed(page);
-    await recordTerminalEvidence(
-      "vim-page-down",
-      JSON.stringify({ before, after: await visibleTopLineNumber(page) }),
-    );
+async function expectVimPageDown(page: Page, before: { topLine: number; lastLine: number }) {
+  await test.step("Vim advances past the previous visible page while Find stays closed", async () => {
+    try {
+      await expect.poll(() => visibleTopLineNumber(page)).toBeGreaterThan(before.lastLine);
+      await expectFindClosed(page);
+    } finally {
+      await recordTerminalEvidence("vim-after-control-f", await getTerminalBufferText(page));
+      await recordTerminalEvidence(
+        "vim-page-down",
+        JSON.stringify({ before, after: { topLine: await visibleTopLineNumber(page) } }),
+      );
+    }
   });
 }
 
@@ -137,7 +141,7 @@ async function expectCatRoundTrip(page: Page) {
 }
 
 async function openNumberedFileInVim(page: Page) {
-  await test.step("Open 300 numbered lines in vim without user configuration", async () => {
+  return test.step("Open 300 numbered lines in vim without user configuration", async () => {
     const terminal = await harness.createTerminal({
       name: "Vim page down",
       command: "bash",
@@ -149,9 +153,34 @@ async function openNumberedFileInVim(page: Page) {
       ],
     });
     await harness.openTerminal(page, { terminalId: terminal.id });
-    await expect.poll(() => getTerminalBufferText(page)).toContain("300L");
-    await expect.poll(() => visibleTopLineNumber(page)).toBe(1);
+    await expectVimFirstPage(page);
+    const screen = await readVimScreen(page);
+    await recordTerminalEvidence("vim-before-control-f", screen.text);
+    return { topLine: screen.numberedLines[0], lastLine: screen.numberedLines.at(-1)! };
   });
+}
+
+async function readVimScreen(page: Page) {
+  const rows = await page.evaluate(
+    () => (window as Window & { __paseoTerminal: { rows: number } }).__paseoTerminal.rows,
+  );
+  const text = await getTerminalBufferText(page);
+  const numberedLines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^\d+$/.test(line))
+    .map(Number);
+  return { rows, text, numberedLines };
+}
+
+async function expectVimFirstPage(page: Page) {
+  await expect(async () => {
+    const screen = await readVimScreen(page);
+    // The captured screen has one numbered file line per row, except Vim's
+    // bottom command row. Derive the last visible line from the fitted terminal.
+    expect(screen.numberedLines).toEqual(Array.from({ length: screen.rows - 1 }, (_, i) => i + 1));
+    expect(screen.text).not.toContain("300L");
+  }).toPass({ timeout: 10_000 });
 }
 
 async function visibleTopLineNumber(page: Page) {
@@ -194,8 +223,7 @@ test.describe("macOS terminal shortcuts", () => {
     const vim = spawnSync("which", ["vim"], { encoding: "utf8" });
     await recordTerminalEvidence("which-vim", `status: ${vim.status}\n${vim.stdout}${vim.stderr}`);
     test.skip(vim.status !== 0, "vim is not installed on this runner (which vim failed)");
-    await openNumberedFileInVim(page);
-    const before = await visibleTopLineNumber(page);
+    const before = await openNumberedFileInVim(page);
     await pressTerminalShortcut(page, "Control+f");
     await expectVimPageDown(page, before);
     await quitVim(page);

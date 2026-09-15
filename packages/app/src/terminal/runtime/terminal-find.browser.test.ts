@@ -12,14 +12,14 @@ afterEach(() => {
   runtime?.unmount();
   root?.remove();
 });
-function mount() {
+function mount(options?: { isMac: boolean }) {
   root = document.createElement("div");
   Object.assign(root.style, { width: "480px", height: "200px" });
   const host = document.createElement("div");
   Object.assign(host.style, { width: "100%", height: "100%" });
   root.append(host);
   document.body.append(root);
-  runtime = new TerminalEmulatorRuntime();
+  runtime = new TerminalEmulatorRuntime(options);
   const results: TerminalFindResult[] = [];
   runtime.setCallbacks({
     callbacks: {
@@ -162,4 +162,44 @@ test("preserves inspection through multiple real parser turns of queued output",
   expect(samples.at(-1)!.base).toBeGreaterThan(inspected);
   expect(term.buffer.active.viewportY).toBe(inspected);
   expect(term.getSelection()).toBe("needle");
+});
+
+test.each([true, false])("routes Find and shell input through xterm with isMac=%s", (isMac) => {
+  mount({ isMac });
+  const input: string[] = [];
+  let findRequests = 0;
+  runtime.setCallbacks({
+    callbacks: {
+      onInput: (data) => {
+        input.push(data);
+      },
+      onFindRequest: () => {
+        findRequests += 1;
+      },
+    },
+  });
+  const textarea = root.querySelector("textarea")!;
+  textarea.focus();
+  const ctrlF = new KeyboardEvent("keydown", {
+    key: "f",
+    code: "KeyF",
+    keyCode: 70,
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  textarea.dispatchEvent(ctrlF);
+  expect(findRequests).toBe(isMac ? 0 : 1);
+  expect(input).toEqual(isMac ? ["\x06"] : []);
+  const metaF = new KeyboardEvent("keydown", {
+    key: "f",
+    code: "KeyF",
+    keyCode: 70,
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  textarea.dispatchEvent(metaF);
+  expect(findRequests).toBe(1);
+  expect(metaF.defaultPrevented).toBe(isMac);
 });

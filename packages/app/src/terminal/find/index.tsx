@@ -15,6 +15,7 @@ import { isWeb } from "@/constants/platform";
 import { hasActiveWebOverlay } from "@/lib/overlay-root";
 import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
 import type { TerminalEmulatorHandle } from "@/components/terminal-emulator-contract";
+import { isFindShortcut } from "../runtime/terminal-find-shortcut";
 import type { TerminalFindResult } from "../runtime/terminal-emulator-runtime";
 
 export interface TerminalPaneFindHandle {
@@ -64,13 +65,7 @@ export const TerminalFind = forwardRef<
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || hasActiveWebOverlay() || isImeComposingKeyboardEvent(event))
         return;
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "f" &&
-        terminal.current?.find
-      ) {
+      if (isFindShortcut(event) && terminal.current?.find) {
         event.preventDefault();
         show();
       }

@@ -28,6 +28,7 @@ import {
   type TerminalLocalFileLinkSource,
   type TerminalLocalFileLinkTarget,
 } from "../local-links/terminal-local-link-provider";
+import { isMac, isFindShortcut } from "./terminal-find-shortcut";
 import { resolveTerminalFontFamily, resolveTerminalFontSize } from "./terminal-font";
 
 export type TerminalOutputData = Uint8Array;
@@ -140,11 +141,6 @@ declare global {
   }
 }
 
-const isMac =
-  typeof navigator !== "undefined" &&
-  (/Macintosh|Mac OS/i.test(navigator.userAgent ?? "") ||
-    /Mac/i.test((navigator as Navigator & { platform?: string }).platform ?? ""));
-
 const isAppleHandheld =
   typeof navigator !== "undefined" &&
   isAppleHandheldPlatform({
@@ -182,6 +178,8 @@ function withOverviewRulerBorderHidden(theme: ITheme): ITheme {
 }
 
 export class TerminalEmulatorRuntime {
+  constructor(private readonly options: { isMac: boolean } = { isMac }) {}
+
   private callbacks: TerminalEmulatorRuntimeCallbacks = {};
   private pendingModifiers: PendingTerminalModifiers = {
     ctrl: false,
@@ -297,15 +295,93 @@ export class TerminalEmulatorRuntime {
     );
   }
 
-  private handleFindShortcut(event: KeyboardEvent): boolean {
-    if (
-      !(event.metaKey || event.ctrlKey) ||
-      event.shiftKey ||
-      event.altKey ||
-      event.key.toLowerCase() !== "f" ||
-      !this.callbacks.onFindRequest
-    )
+  attachKeyEventHandler(
+    terminal: Pick<
+      Terminal,
+      "attachCustomKeyEventHandler" | "hasSelection" | "getSelection" | "paste"
+    >,
+  ): void {
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || event.isComposing) {
+        return true;
+      }
+
+      if (this.handleFindShortcut(event)) return false;
+
+      if (
+        !this.options.isMac &&
+        event.ctrlKey &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey
+      ) {
+        const key = event.key.toLowerCase();
+
+        // Ctrl+C: copy selection to clipboard if text is selected, otherwise let xterm send SIGINT
+        if (key === "c" && terminal.hasSelection()) {
+          void navigator.clipboard.writeText(terminal.getSelection());
+          return false;
+        }
+
+        // Ctrl+V: paste from clipboard into terminal
+        if (key === "v") {
+          event.preventDefault();
+          void navigator.clipboard.readText().then((text) => {
+            if (text) {
+              terminal.paste(text);
+            }
+            return;
+          });
+          return false;
+        }
+
+        return true;
+      }
+
+      const normalizedKey = normalizeDomTerminalKey(event.key);
+      if (!normalizedKey || isTerminalModifierDomKey(event.key)) {
+        return true;
+      }
+
+      if (
+        !shouldInterceptDomTerminalKey({
+          key: normalizedKey,
+          ctrlKey: event.ctrlKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+          metaKey: event.metaKey,
+          pendingModifiers: this.pendingModifiers,
+          enhancedInputActive: this.inputModeTracker.supportsModifiedEnter(),
+          isAppleHandheld,
+        })
+      ) {
+        return true;
+      }
+
+      const modifiers = mergeTerminalModifiers({
+        pendingModifiers: this.pendingModifiers,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+      });
+      this.callbacks.onTerminalKey?.({
+        key: normalizeTerminalTransportKey(normalizedKey),
+        ...modifiers,
+      });
+
+      if (this.pendingModifiers.ctrl || this.pendingModifiers.shift || this.pendingModifiers.alt) {
+        this.callbacks.onPendingModifiersConsumed?.();
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
       return false;
+    });
+  }
+
+  private handleFindShortcut(event: KeyboardEvent): boolean {
+    if (!isFindShortcut(event, this.options) || !this.callbacks.onFindRequest) return false;
     event.preventDefault();
     event.stopPropagation();
     this.callbacks.onFindRequest();
@@ -555,77 +631,7 @@ export class TerminalEmulatorRuntime {
       this.callbacks.onInput?.(data);
     });
 
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type !== "keydown" || event.isComposing) {
-        return true;
-      }
-
-      if (this.handleFindShortcut(event)) return false;
-
-      if (!isMac && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
-        const key = event.key.toLowerCase();
-
-        // Ctrl+C: copy selection to clipboard if text is selected, otherwise let xterm send SIGINT
-        if (key === "c" && terminal.hasSelection()) {
-          void navigator.clipboard.writeText(terminal.getSelection());
-          return false;
-        }
-
-        // Ctrl+V: paste from clipboard into terminal
-        if (key === "v") {
-          event.preventDefault();
-          void navigator.clipboard.readText().then((text) => {
-            if (text) {
-              terminal.paste(text);
-            }
-            return;
-          });
-          return false;
-        }
-
-        return true;
-      }
-
-      const normalizedKey = normalizeDomTerminalKey(event.key);
-      if (!normalizedKey || isTerminalModifierDomKey(event.key)) {
-        return true;
-      }
-
-      if (
-        !shouldInterceptDomTerminalKey({
-          key: normalizedKey,
-          ctrlKey: event.ctrlKey,
-          shiftKey: event.shiftKey,
-          altKey: event.altKey,
-          metaKey: event.metaKey,
-          pendingModifiers: this.pendingModifiers,
-          enhancedInputActive: this.inputModeTracker.supportsModifiedEnter(),
-          isAppleHandheld,
-        })
-      ) {
-        return true;
-      }
-
-      const modifiers = mergeTerminalModifiers({
-        pendingModifiers: this.pendingModifiers,
-        ctrlKey: event.ctrlKey,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        metaKey: event.metaKey,
-      });
-      this.callbacks.onTerminalKey?.({
-        key: normalizeTerminalTransportKey(normalizedKey),
-        ...modifiers,
-      });
-
-      if (this.pendingModifiers.ctrl || this.pendingModifiers.shift || this.pendingModifiers.alt) {
-        this.callbacks.onPendingModifiersConsumed?.();
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      return false;
-    });
+    this.attachKeyEventHandler(terminal);
 
     const removeTouchListeners = this.setupTouchScrollHandlers({
       root: input.root,

@@ -192,6 +192,63 @@ describe("terminal-emulator-runtime", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    { isMac: true, ctrlKey: true, metaKey: false, opensFind: false },
+    { isMac: true, ctrlKey: false, metaKey: true, opensFind: true },
+    { isMac: false, ctrlKey: true, metaKey: false, opensFind: true },
+    { isMac: false, ctrlKey: false, metaKey: true, opensFind: false },
+    { isMac: true, ctrlKey: false, metaKey: true, shiftKey: true, opensFind: false },
+    { isMac: true, ctrlKey: false, metaKey: true, altKey: true, opensFind: false },
+    { isMac: false, ctrlKey: true, metaKey: false, shiftKey: true, opensFind: false },
+    { isMac: false, ctrlKey: true, metaKey: false, altKey: true, opensFind: false },
+    { isMac: true, ctrlKey: true, metaKey: true, opensFind: false },
+    { isMac: false, ctrlKey: true, metaKey: true, opensFind: false },
+  ])(
+    "routes Find with isMac=$isMac ctrl=$ctrlKey meta=$metaKey shift=$shiftKey alt=$altKey",
+    ({ isMac, ctrlKey, metaKey, shiftKey = false, altKey = false, opensFind }) => {
+      const runtime = new TerminalEmulatorRuntime({ isMac });
+      let findRequests = 0;
+      let prevented = false;
+      let stopped = false;
+      runtime.setCallbacks({
+        callbacks: {
+          onFindRequest: () => {
+            findRequests += 1;
+          },
+        },
+      });
+      const event = {
+        type: "keydown",
+        key: "f",
+        ctrlKey,
+        metaKey,
+        shiftKey,
+        altKey,
+        isComposing: false,
+        preventDefault: () => {
+          prevented = true;
+        },
+        stopPropagation: () => {
+          stopped = true;
+        },
+      } as KeyboardEvent;
+
+      let passedToXterm: boolean | undefined;
+      runtime.attachKeyEventHandler({
+        attachCustomKeyEventHandler: (handler) => {
+          passedToXterm = handler(event);
+        },
+        hasSelection: () => false,
+        getSelection: () => "",
+        paste: () => {},
+      });
+      expect(passedToXterm).toBe(!opensFind);
+      expect(findRequests).toBe(opensFind ? 1 : 0);
+      expect(prevented).toBe(opensFind);
+      expect(stopped).toBe(opensFind);
+    },
+  );
+
   it("drains contiguous plain writes without waiting for each commit, gating a clear behind them", () => {
     const { runtime, terminal, writeCallbacks, writeTexts } = createRuntimeWithTerminal();
     const committed: string[] = [];

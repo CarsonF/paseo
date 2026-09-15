@@ -30,6 +30,7 @@ export const en = {
       copy: "Copy",
       copyLine: "Copy line",
       dismiss: "Dismiss",
+      reload: "Reload",
       retry: "Retry",
       search: "Search",
       select: "Select",
@@ -171,7 +172,7 @@ export const en = {
       initialPromptRequired: "Initial prompt is required",
       alreadyLoading: "Already loading",
       uploadFailed: "Failed to upload file",
-      noClipboardImage: "No image in clipboard",
+      noClipboardImage: "No image in the current clipboard. Try pasting from your keyboard.",
       pasteImageFailed: "Failed to paste image",
       fileTooLarge: "{{fileName}} is too large (max {{size}})",
     },
@@ -226,6 +227,10 @@ export const en = {
     historyLoadFailed: "Couldn't load agent history",
     messageCapped: "This message was capped ({{bytes}} bytes).",
     permission: {
+      rejectedPlan: "Rejected plan",
+      approvedPlan: "Approved plan",
+      canceledPlan: "Canceled plan",
+
       plan: "Plan",
       required: "Permission Required",
       deny: "Deny",
@@ -239,7 +244,8 @@ export const en = {
     states: {
       notFound: "Agent not found",
       failedToLoad: "Failed to load agent",
-      reconnecting: "Reconnecting",
+      reconnecting: "Reconnecting to host",
+      updating: "Updating messages",
       timelineSyncFailed: "Couldn't refresh agent history.",
       timelineSyncRetrying: "Retrying…",
       archivingTitle: "Archiving agent...",
@@ -909,6 +915,9 @@ export const en = {
         openChangesTab: "Open Changes tab",
         openDiffTab: "Open Diff tab",
         closeChangesTab: "Close Changes tab",
+        jumpToFile: {
+          title: "Jump to file",
+        },
         binaryFile: "Binary file",
         tooLarge: "Diff too large to display",
         previewTooLargeTitle: "This diff is too large to preview",
@@ -1304,6 +1313,23 @@ export const en = {
     },
     daemon: {
       title: "Daemon",
+      lifecycle: {
+        owned: "Launched by this Desktop session",
+        attached: "Attached to an existing daemon",
+        ownedMessage: "This daemon was launched by this Desktop session.",
+        attachedMessage: "This daemon was not launched by this Desktop session.",
+        stopTitle: "Stop local daemon?",
+        stopMessage:
+          "{{ownership}}\nHome: {{home}}\nSupervisor PID: {{pid}}\nRunning agent work will be interrupted.",
+        stop: "Stop daemon",
+        stopping: "Stopping…",
+        stopFailed: "Unable to stop daemon",
+        pauseAttached: "Pause automatic daemon management? The attached daemon will keep running.",
+        pause: "Pause management",
+        workerUpdated: "Worker updated to {{version}}",
+        supervisorRefresh:
+          "The running supervisor retains its original code. Its launcher must stop and start it to refresh the supervisor.",
+      },
       status: {
         title: "Status",
         builtInOnly: "Only the built-in desktop daemon is shown here",

@@ -118,9 +118,11 @@ async function expectCatControlF(page: Page) {
 }
 
 async function expectVimPageDown(page: Page, before: { topLine: number; lastLine: number }) {
-  await test.step("Vim advances past the previous visible page while Find stays closed", async () => {
+  await test.step("Vim pages down while Find stays closed", async () => {
     try {
-      await expect.poll(() => visibleTopLineNumber(page)).toBeGreaterThan(before.lastLine);
+      // Vim's Ctrl+F keeps two lines of overlap, so the new page starts before the old page ends.
+      await expect.poll(() => visibleTopLineNumber(page)).toBeGreaterThan(before.topLine);
+      await expect.poll(() => visibleTopLineNumber(page)).toBeGreaterThanOrEqual(40);
       await expectFindClosed(page);
     } finally {
       await recordTerminalEvidence("vim-after-control-f", await getTerminalBufferText(page));
